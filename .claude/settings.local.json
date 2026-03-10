@@ -6,7 +6,8 @@
       "Bash(npx tsc --noEmit)",
       "mcp__Claude_Preview__preview_start",
       "Bash(curl -s \"http://localhost:3001/api/rss?url=https%3A%2F%2Fwww.nature.com%2Fnature.rss\")",
-      "Bash(npm prune)"
+      "Bash(npm prune)",
+      "Bash(npm run deploy)"
     ]
   }
 }
