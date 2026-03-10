@@ -17,11 +17,11 @@ function formatRelativeTime(dateStr: string): string {
 }
 
 /** Routes external URLs through the backend proxy to avoid CORS. Local paths pass through directly.
- *  In production (GitHub Pages), falls back to the allorigins public CORS proxy. */
+ *  In production (GitHub Pages), routes through the codetabs CORS proxy. */
 function buildFetchUrl(url: string): string {
   if (url.startsWith('/') || url.startsWith('./')) return url;
   if (import.meta.env.PROD) {
-    return `https://api.allorigins.win/raw?url=${encodeURIComponent(url)}`;
+    return `https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(url)}`;
   }
   return `/api/rss?url=${encodeURIComponent(url)}`;
 }
