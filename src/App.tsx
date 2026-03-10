@@ -178,7 +178,7 @@ export default function App() {
         feeds: [
           'https://feeds.bbci.co.uk/news/rss.xml',
           'https://www.theguardian.com/international/rss',
-          'https://rss.nytimes.com/services/xml/rss/nyt/World.xml',
+          'https://www.aljazeera.com/xml/rss/all.xml',
           'https://www.economist.com/latest/rss.xml',
         ],
       },
@@ -189,9 +189,9 @@ export default function App() {
         color: 'emerald',
         feeds: [
           'https://www.nature.com/nature.rss',
-          'https://www.science.org/blogs/pipeline/feed',
-          'https://www.sciencedaily.com/rss/top.xml',
-          'https://phys.org/rss-feed/breaking/',
+          'https://www.nasa.gov/rss/dyn/breaking_news.rss',
+          'https://www.newscientist.com/section/news/feed/',
+          'https://arstechnica.com/feed/',
           'https://www.thelancet.com/rssfeed/lanhae_current.xml',
         ],
       },
@@ -201,7 +201,7 @@ export default function App() {
         icon: 'TrendingUp',
         color: 'violet',
         feeds: [
-          'https://ir.thomsonreuters.com/rss/sec-filings.xml?items=15',
+          'https://www.ft.com/?format=rss',
           'https://feeds.bloomberg.com/markets/news.rss',
         ],
       },
@@ -259,19 +259,28 @@ export default function App() {
         setSectionStatus(prev => ({ ...prev, [section.id]: 'loading' }));
       }
 
-      Promise.all(section.feeds.map(url => parseRssFeed(url)))
-        .then(results => {
-          const items = results.flat();
-          setSectionItems(prev => ({ ...prev, [section.id]: items }));
-          setSectionStatus(prev => ({ ...prev, [section.id]: 'success' }));
-        })
-        .catch(err => {
-          console.error(`[InfoDeck] Failed to fetch feeds for "${section.name}":`, err);
-          if (!silent) {
-            setSectionStatus(prev => ({ ...prev, [section.id]: 'error' }));
-            setSectionError(prev => ({ ...prev, [section.id]: String(err.message || err) }));
-          }
-        });
+      // Use individual catch so one broken feed doesn't take down the whole section
+      Promise.all(
+        section.feeds.map(url =>
+          parseRssFeed(url).catch(err => {
+            console.warn(`[InfoDeck] Skipping feed ${url}:`, err.message);
+            return [] as FeedItem[];
+          })
+        )
+      ).then(results => {
+        const items = results.flat();
+        setSectionItems(prev => ({ ...prev, [section.id]: items }));
+        setSectionStatus(prev => ({
+          ...prev,
+          [section.id]: items.length > 0 ? 'success' : 'error',
+        }));
+        if (items.length === 0 && !silent) {
+          setSectionError(prev => ({
+            ...prev,
+            [section.id]: 'No feeds returned any items',
+          }));
+        }
+      });
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [feedsKey, refreshTick]);
