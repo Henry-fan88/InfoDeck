@@ -66,7 +66,7 @@ function rssProxyPlugin(): Plugin {
   };
 }
 
-export default defineConfig(({mode}) => {
+export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, '.', '');
   return {
     plugins: [react(), tailwindcss(), rssProxyPlugin()],
@@ -82,4 +82,6 @@ export default defineConfig(({mode}) => {
       hmr: process.env.DISABLE_HMR !== 'true',
     },
   };
+  base: '/InfoDeck/',  // your repo name
+    plugins: [react()]
 });
