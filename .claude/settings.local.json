@@ -1,0 +1,12 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(mkdir -p /Users/fanleheng/Desktop/infodeck/public)",
+      "Bash(cp /Users/fanleheng/Downloads/nature.rss /Users/fanleheng/Desktop/infodeck/public/nature.rss)",
+      "Bash(npx tsc --noEmit)",
+      "mcp__Claude_Preview__preview_start",
+      "Bash(curl -s \"http://localhost:3001/api/rss?url=https%3A%2F%2Fwww.nature.com%2Fnature.rss\")",
+      "Bash(npm prune)"
+    ]
+  }
+}
