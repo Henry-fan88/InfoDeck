@@ -197,7 +197,7 @@ export default function App() {
       },
       {
         id: 'finance',
-        name: 'Financial',
+        name: 'Finance',
         icon: 'TrendingUp',
         color: 'violet',
         feeds: [
