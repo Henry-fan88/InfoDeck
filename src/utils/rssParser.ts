@@ -28,6 +28,25 @@ function extractSourceDomain(link: string): string {
 
 const FETCH_TIMEOUT = 12_000;
 
+/**
+ * Self-hosted Cloudflare Worker proxy URL.
+ * Set VITE_PROXY_URL in .env (or .env.production) to enable, e.g.:
+ *   VITE_PROXY_URL=https://infodeck-rss-proxy.<you>.workers.dev
+ * When set, this is the primary (most reliable) strategy.
+ */
+const WORKER_PROXY_URL = import.meta.env.VITE_PROXY_URL as string | undefined;
+
+/** Fetch through the self-hosted Cloudflare Worker proxy. */
+async function fetchViaWorker(url: string): Promise<string> {
+  if (!WORKER_PROXY_URL) throw new Error('Worker proxy not configured');
+  const proxyUrl = `${WORKER_PROXY_URL}/?url=${encodeURIComponent(url)}`;
+  const res = await fetch(proxyUrl, { signal: AbortSignal.timeout(FETCH_TIMEOUT) });
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  const text = await res.text();
+  if (!text.trim()) throw new Error('Empty response from worker');
+  return text;
+}
+
 /** Try fetching the URL directly — works when the feed server sets CORS headers. */
 async function fetchDirect(url: string): Promise<string> {
   const res = await fetch(url, { signal: AbortSignal.timeout(FETCH_TIMEOUT) });
@@ -44,7 +63,6 @@ async function fetchViaCodetabs(url: string): Promise<string> {
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
   const text = await res.text();
   if (!text.trim()) throw new Error('Empty response from proxy');
-  // Detect HTML error pages the proxy sometimes returns
   if (text.includes('<H1>Access Denied</H1>') || text.includes('ERROR PAGE:'))
     throw new Error('Feed server blocked the proxy');
   return text;
@@ -246,7 +264,7 @@ export type FeedResult = {
 
 /**
  * Fetches and parses an RSS/Atom/OPML URL into FeedItems.
- * Uses a multi-strategy fallback: direct → CORS proxy → rss2json API.
+ * Uses a multi-strategy fallback: Worker proxy (if configured) → direct → CORS proxy → rss2json API.
  */
 export async function parseRssFeed(url: string, _depth = 0): Promise<FeedItem[]> {
   if (_depth > 2) throw new Error('Too many feed redirects');
@@ -266,6 +284,16 @@ export async function parseRssFeed(url: string, _depth = 0): Promise<FeedItem[]>
 
   // Production: try multiple strategies
   const errors: string[] = [];
+
+  // Strategy 0: self-hosted Cloudflare Worker proxy (most reliable if configured)
+  if (WORKER_PROXY_URL) {
+    try {
+      const text = await fetchViaWorker(url);
+      return await parseXmlText(text, url, _depth);
+    } catch (e) {
+      errors.push(`worker: ${(e as Error).message}`);
+    }
+  }
 
   // Strategy 1: direct fetch (works when feed server sets CORS headers)
   try {
