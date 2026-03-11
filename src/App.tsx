@@ -11,7 +11,7 @@ import { Sidebar } from './components/Sidebar';
 import { CustomizeModal, AVAILABLE_ICONS } from './components/CustomizeModal';
 import { AddFeedModal } from './components/AddFeedModal';
 import { ControlBar, TimeFilter, SortBy } from './components/ControlBar';
-import { parseRssFeed } from './utils/rssParser';
+import { fetchFeedWithStatus, FeedResult } from './utils/rssParser';
 
 // ── Feed Card ────────────────────────────────────────────────────────────────
 
@@ -211,6 +211,8 @@ export default function App() {
   const [sectionItems, setSectionItems] = useState<Record<string, FeedItem[]>>({});
   const [sectionStatus, setSectionStatus] = useState<Record<string, FeedStatus>>({});
   const [sectionError, setSectionError] = useState<Record<string, string>>({});
+  // Per-feed error map: feedUrl → error message (empty string = ok)
+  const [feedErrors, setFeedErrors] = useState<Record<string, string>>({});
 
   // Control bar state
   const [timeFilter, setTimeFilter] = useState<TimeFilter>('all');
@@ -259,28 +261,29 @@ export default function App() {
         setSectionStatus(prev => ({ ...prev, [section.id]: 'loading' }));
       }
 
-      // Use individual catch so one broken feed doesn't take down the whole section
-      Promise.all(
-        section.feeds.map(url =>
-          parseRssFeed(url).catch(err => {
-            console.warn(`[InfoDeck] Skipping feed ${url}:`, err.message);
-            return [] as FeedItem[];
-          })
-        )
-      ).then(results => {
-        const items = results.flat();
-        setSectionItems(prev => ({ ...prev, [section.id]: items }));
-        setSectionStatus(prev => ({
-          ...prev,
-          [section.id]: items.length > 0 ? 'success' : 'error',
-        }));
-        if (items.length === 0 && !silent) {
-          setSectionError(prev => ({
+      Promise.all(section.feeds.map(url => fetchFeedWithStatus(url)))
+        .then((results: FeedResult[]) => {
+          const items = results.flatMap(r => r.items);
+          setSectionItems(prev => ({ ...prev, [section.id]: items }));
+          setSectionStatus(prev => ({
             ...prev,
-            [section.id]: 'No feeds returned any items',
+            [section.id]: items.length > 0 ? 'success' : 'error',
           }));
-        }
-      });
+          if (items.length === 0 && !silent) {
+            setSectionError(prev => ({
+              ...prev,
+              [section.id]: 'No feeds returned any items',
+            }));
+          }
+          // Update per-feed error status
+          setFeedErrors(prev => {
+            const next = { ...prev };
+            for (const r of results) {
+              next[r.url] = r.error || '';
+            }
+            return next;
+          });
+        });
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [feedsKey, refreshTick]);
@@ -452,6 +455,7 @@ export default function App() {
         onClose={() => setIsCustomizeOpen(false)}
         sections={sections}
         onSave={setSections}
+        feedErrors={feedErrors}
       />
 
       <AddFeedModal

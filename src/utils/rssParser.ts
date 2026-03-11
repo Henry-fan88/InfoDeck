@@ -16,22 +16,76 @@ function formatRelativeTime(dateStr: string): string {
   return `${diffDays}d ago`;
 }
 
-/** Routes external URLs through the backend proxy to avoid CORS. Local paths pass through directly.
- *  In production (GitHub Pages), routes through the codetabs CORS proxy. */
-function buildFetchUrl(url: string): string {
-  if (url.startsWith('/') || url.startsWith('./')) return url;
-  if (import.meta.env.PROD) {
-    return `https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(url)}`;
-  }
-  return `/api/rss?url=${encodeURIComponent(url)}`;
-}
-
 function extractSourceDomain(link: string): string {
   try {
     return new URL(link).hostname.replace(/^www\./, '');
   } catch {
     return 'unknown';
   }
+}
+
+// ── Fetch strategies ────────────────────────────────────────────────────────
+
+const FETCH_TIMEOUT = 12_000;
+
+/** Try fetching the URL directly — works when the feed server sets CORS headers. */
+async function fetchDirect(url: string): Promise<string> {
+  const res = await fetch(url, { signal: AbortSignal.timeout(FETCH_TIMEOUT) });
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  const text = await res.text();
+  if (!text.trim()) throw new Error('Empty response');
+  return text;
+}
+
+/** Fetch through the codetabs CORS proxy. */
+async function fetchViaCodetabs(url: string): Promise<string> {
+  const proxyUrl = `https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(url)}`;
+  const res = await fetch(proxyUrl, { signal: AbortSignal.timeout(FETCH_TIMEOUT) });
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  const text = await res.text();
+  if (!text.trim()) throw new Error('Empty response from proxy');
+  // Detect HTML error pages the proxy sometimes returns
+  if (text.includes('<H1>Access Denied</H1>') || text.includes('ERROR PAGE:'))
+    throw new Error('Feed server blocked the proxy');
+  return text;
+}
+
+/** Fetch via rss2json API — server-side fetch that returns JSON instead of XML.
+ *  Works for feeds that block CORS proxies but allow normal server requests. */
+async function fetchViaRss2json(url: string): Promise<FeedItem[]> {
+  const apiUrl = `https://api.rss2json.com/v1/api.json?rss_url=${encodeURIComponent(url)}`;
+  const res = await fetch(apiUrl, { signal: AbortSignal.timeout(FETCH_TIMEOUT) });
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  const json = await res.json();
+  if (json.status !== 'ok') throw new Error(json.message || 'rss2json error');
+  if (!json.items?.length) throw new Error('No items');
+
+  const feedTitle = json.feed?.title || 'Unknown';
+  const feedLink = json.feed?.link || '';
+  return json.items.map((item: { title?: string; link?: string; pubDate?: string; author?: string }, i: number) => {
+    const link = item.link || '#';
+    const pubDate = item.pubDate || '';
+    return {
+      id: link || `r2j-${i}`,
+      title: item.title || 'Untitled',
+      source: feedTitle,
+      sourceDomain: extractSourceDomain(feedLink || link),
+      time: pubDate ? formatRelativeTime(pubDate) : 'Unknown',
+      url: link,
+      publishedAt: pubDate || undefined,
+    };
+  });
+}
+
+/** Try fetching via the local dev proxy. */
+async function fetchViaDevProxy(url: string): Promise<string> {
+  const res = await fetch(`/api/rss?url=${encodeURIComponent(url)}`, {
+    signal: AbortSignal.timeout(FETCH_TIMEOUT),
+  });
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  const text = await res.text();
+  if (!text.trim()) throw new Error('Empty response');
+  return text;
 }
 
 // ── Format detection ─────────────────────────────────────────────────────────
@@ -153,23 +207,14 @@ function parseAtom(doc: Document): FeedItem[] {
   });
 }
 
-// ── Main entry point ─────────────────────────────────────────────────────────
+// ── XML parsing entry point ─────────────────────────────────────────────────
 
-/**
- * Fetches and parses an RSS/Atom/OPML URL into FeedItems.
- * Handles RSS 1.0, RSS 2.0, Atom, and OPML (auto-resolves the first feed inside).
- */
-export async function parseRssFeed(url: string, _depth = 0): Promise<FeedItem[]> {
-  if (_depth > 2) throw new Error('Too many feed redirects');
-
-  const response = await fetch(buildFetchUrl(url));
-  if (!response.ok) throw new Error(`HTTP ${response.status}: ${response.statusText}`);
-  const text = await response.text();
-
+function parseXmlText(text: string, originalUrl: string, depth: number): FeedItem[] | Promise<FeedItem[]> {
   const domParser = new DOMParser();
   const doc = domParser.parseFromString(text, 'application/xml');
 
-  if (doc.querySelector('parsererror')) throw new Error('Failed to parse feed XML');
+  if (doc.querySelector('parsererror'))
+    throw new Error('Failed to parse feed XML');
 
   const format = detectFormat(doc);
 
@@ -179,18 +224,84 @@ export async function parseRssFeed(url: string, _depth = 0): Promise<FeedItem[]>
     case 'atom': return parseAtom(doc);
 
     case 'opml': {
-      // OPML is a directory of feeds — extract all xmlUrl attributes and fetch the first one
       const feedUrls = Array.from(doc.getElementsByTagName('outline'))
         .map(o => o.getAttribute('xmlUrl'))
         .filter((u): u is string => Boolean(u));
-
       if (feedUrls.length === 0) throw new Error('OPML file contains no RSS feed URLs');
-
-      // Recursively parse the first feed inside the OPML
-      return parseRssFeed(feedUrls[0], _depth + 1);
+      return parseRssFeed(feedUrls[0], depth + 1);
     }
 
     default:
       throw new Error('Unrecognized feed format. Supported: RSS 1.0, RSS 2.0, Atom, OPML.');
+  }
+}
+
+// ── Main entry point ─────────────────────────────────────────────────────────
+
+export type FeedResult = {
+  items: FeedItem[];
+  error?: string;
+  url: string;
+};
+
+/**
+ * Fetches and parses an RSS/Atom/OPML URL into FeedItems.
+ * Uses a multi-strategy fallback: direct → CORS proxy → rss2json API.
+ */
+export async function parseRssFeed(url: string, _depth = 0): Promise<FeedItem[]> {
+  if (_depth > 2) throw new Error('Too many feed redirects');
+
+  // Local paths: no proxy needed
+  if (url.startsWith('/') || url.startsWith('./')) {
+    const res = await fetch(url);
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    return parseXmlText(await res.text(), url, _depth) as FeedItem[];
+  }
+
+  // Dev mode: just use the local Express proxy
+  if (!import.meta.env.PROD) {
+    const text = await fetchViaDevProxy(url);
+    return parseXmlText(text, url, _depth) as FeedItem[];
+  }
+
+  // Production: try multiple strategies
+  const errors: string[] = [];
+
+  // Strategy 1: direct fetch (works when feed server sets CORS headers)
+  try {
+    const text = await fetchDirect(url);
+    return await parseXmlText(text, url, _depth);
+  } catch (e) {
+    errors.push(`direct: ${(e as Error).message}`);
+  }
+
+  // Strategy 2: codetabs CORS proxy
+  try {
+    const text = await fetchViaCodetabs(url);
+    return await parseXmlText(text, url, _depth);
+  } catch (e) {
+    errors.push(`proxy: ${(e as Error).message}`);
+  }
+
+  // Strategy 3: rss2json API (server-side fetch, returns JSON)
+  try {
+    return await fetchViaRss2json(url);
+  } catch (e) {
+    errors.push(`rss2json: ${(e as Error).message}`);
+  }
+
+  throw new Error(`All fetch strategies failed — ${errors.join('; ')}`);
+}
+
+/**
+ * Fetch a single feed and return a FeedResult (never throws).
+ * Includes error info for per-feed status tracking.
+ */
+export async function fetchFeedWithStatus(url: string): Promise<FeedResult> {
+  try {
+    const items = await parseRssFeed(url);
+    return { url, items };
+  } catch (e) {
+    return { url, items: [], error: (e as Error).message };
   }
 }

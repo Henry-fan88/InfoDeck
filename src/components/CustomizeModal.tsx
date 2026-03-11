@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { X, Plus, Trash2, ChevronUp, ChevronDown, Save, Globe, Cpu, TrendingUp, Briefcase, Heart, Music, Video, Star, Zap, Coffee, Book, Monitor } from 'lucide-react';
+import { X, Plus, Trash2, ChevronUp, ChevronDown, Save, Globe, Cpu, TrendingUp, Briefcase, Heart, Music, Video, Star, Zap, Coffee, Book, Monitor, AlertTriangle, Check } from 'lucide-react';
 import { SectionConfig, AVAILABLE_COLORS } from '../types';
 
 export const AVAILABLE_ICONS: Record<string, React.ElementType> = {
@@ -12,9 +12,10 @@ type CustomizeModalProps = {
   onClose: () => void;
   sections: SectionConfig[];
   onSave: (sections: SectionConfig[]) => void;
+  feedErrors?: Record<string, string>; // feedUrl → error message (empty = ok)
 };
 
-export function CustomizeModal({ isOpen, onClose, sections, onSave }: CustomizeModalProps) {
+export function CustomizeModal({ isOpen, onClose, sections, onSave, feedErrors = {} }: CustomizeModalProps) {
   const [localSections, setLocalSections] = useState<SectionConfig[]>([]);
 
   useEffect(() => {
@@ -165,20 +166,40 @@ export function CustomizeModal({ isOpen, onClose, sections, onSave }: CustomizeM
                   <div>
                     <label className="block text-xs font-bold text-gray-500 uppercase tracking-wider mb-2">RSS Feeds</label>
                     <div className="space-y-2">
-                      {section.feeds.map((feed, fIndex) => (
-                        <div key={fIndex} className="flex gap-2">
-                          <input 
-                            type="url" 
-                            value={feed}
-                            placeholder="https://example.com/feed.xml"
-                            onChange={(e) => updateFeed(index, fIndex, e.target.value)}
-                            className="flex-1 px-3 py-2 bg-gray-50 border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-black/5 focus:border-gray-400 transition-all text-sm font-mono"
-                          />
-                          <button onClick={() => removeFeed(index, fIndex)} className="p-2 text-gray-400 hover:text-red-500 hover:bg-red-50 rounded-lg transition-colors">
-                            <Trash2 className="w-4 h-4" />
-                          </button>
-                        </div>
-                      ))}
+                      {section.feeds.map((feed, fIndex) => {
+                        const errMsg = feed ? feedErrors[feed] : undefined;
+                        // undefined = not fetched yet, '' = ok, non-empty string = error
+                        const hasError = errMsg !== undefined && errMsg !== '';
+                        const isOk = errMsg === '';
+                        return (
+                          <div key={fIndex}>
+                            <div className="flex gap-2 items-center">
+                              <div className="relative flex-1">
+                                <input
+                                  type="url"
+                                  value={feed}
+                                  placeholder="https://example.com/feed.xml"
+                                  onChange={(e) => updateFeed(index, fIndex, e.target.value)}
+                                  className={`w-full px-3 py-2 pr-9 bg-gray-50 border rounded-lg focus:outline-none focus:ring-2 focus:ring-black/5 focus:border-gray-400 transition-all text-sm font-mono ${
+                                    hasError ? 'border-red-300 bg-red-50/50' : 'border-gray-200'
+                                  }`}
+                                />
+                                {feed && (isOk || hasError) && (
+                                  <span className={`absolute right-2.5 top-1/2 -translate-y-1/2 ${hasError ? 'text-red-500' : 'text-emerald-500'}`} title={hasError ? errMsg : 'Feed loaded successfully'}>
+                                    {hasError ? <AlertTriangle className="w-4 h-4" /> : <Check className="w-4 h-4" />}
+                                  </span>
+                                )}
+                              </div>
+                              <button onClick={() => removeFeed(index, fIndex)} className="p-2 text-gray-400 hover:text-red-500 hover:bg-red-50 rounded-lg transition-colors">
+                                <Trash2 className="w-4 h-4" />
+                              </button>
+                            </div>
+                            {hasError && (
+                              <p className="mt-1 ml-0.5 text-xs text-red-500">{errMsg}</p>
+                            )}
+                          </div>
+                        );
+                      })}
                       <button 
                         onClick={() => addFeed(index)}
                         className="flex items-center gap-1.5 text-xs font-semibold text-gray-500 hover:text-black transition-colors py-1"
